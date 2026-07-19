@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Memories Collection
+    match /memories/{memoryId} {
+      allow read: if true;
+      allow create: if isValidMemory(request.resource.data);
+      allow update: if isValidMemory(request.resource.data);
+      allow delete: if true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidMemory(data) {
+      return data.keys().hasAll(['content', 'createdAt', 'date'])
+        && data.content is string
+        && data.content.size() <= 100000
+        && data.createdAt is int
+        && data.date is string
+        && data.date.size() <= 15
+        && (!data.keys().hasAny(['title']) || (data.title is string && data.title.size() <= 1000))
+        && (!data.keys().hasAny(['tags']) || data.tags is list)
+        && (!data.keys().hasAny(['isFavorite']) || data.isFavorite is bool);
+    }
+  }
+}

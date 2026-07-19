@@ -1,0 +1,6 @@
+{
+  "name": "기억",
+  "description": "생각, 영감, 중요 이미지와 링크를 깔끔하게 보관하고 관리하는 개인 기억 공간입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

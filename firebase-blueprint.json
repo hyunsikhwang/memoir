@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "Memory": {
+      "title": "Memory",
+      "description": "A single saved memory fragment",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "date": { "type": "string" },
+        "tags": { "type": "array" },
+        "media": { "type": "object" },
+        "linkPreviews": { "type": "array" },
+        "isFavorite": { "type": "boolean" }
+      },
+      "required": ["content", "createdAt", "date"]
+    }
+  },
+  "firestore": {
+    "memories/{memoryId}": {
+      "schema": "Memory",
+      "description": "User's saved memories collection"
+    }
+  }
+}
