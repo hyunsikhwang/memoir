@@ -5,7 +5,9 @@
 
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import firebaseConfig from "../firebase-applet-config.json";
+
+// @ts-ignore
+const firebaseConfig = typeof __FIREBASE_CONFIG__ !== "undefined" ? __FIREBASE_CONFIG__ : null;
 
 let db: any = null;
 let isFirebaseEnabled = false;
