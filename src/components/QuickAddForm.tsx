@@ -16,6 +16,57 @@ import {
   Compass
 } from "lucide-react";
 
+const compressImage = (file: File, maxWidth = 1024, maxHeight = 1024, quality = 0.75): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        // Calculate new dimensions keeping aspect ratio
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(event.target?.result as string);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Convert to compressed jpeg data URL
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        resolve(dataUrl);
+      };
+      img.onerror = () => {
+        // Fallback to original reader result on error
+        resolve(event.target?.result as string);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => {
+      reject(reader.error);
+    };
+    reader.readAsDataURL(file);
+  });
+};
+
 interface QuickAddFormProps {
   onSave: (memory: Omit<Memory, "id">) => Promise<void>;
 }
@@ -46,51 +97,130 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
   const [tempVideoUrl, setTempVideoUrl] = useState("");
   const [tempLinkUrl, setTempLinkUrl] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
 
   // Tags
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle local image file uploads
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle local image file uploads with compression
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const filesArray = Array.from(e.target.files) as File[];
-      filesArray.forEach((file) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === "string") {
-            setImageUrls((prev) => [...prev, reader.result as string]);
-          }
-        };
-        reader.readAsDataURL(file);
-      });
+      setIsCompressing(true);
+      try {
+        const compressedUrls = await Promise.all(
+          filesArray.map((file) => compressImage(file))
+        );
+        setImageUrls((prev) => [...prev, ...compressedUrls]);
+      } catch (err) {
+        console.error("Image compression error:", err);
+      } finally {
+        setIsCompressing(false);
+        // Clear input value so same file can be selected again
+        if (e.target) e.target.value = "";
+      }
     }
   };
 
-  // Handle image copy & paste inside the content box
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  // Handle local video file uploads
+  const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const filesArray = Array.from(e.target.files) as File[];
+      setIsVideoLoading(true);
+      try {
+        const readVideo = (file: File): Promise<string> => {
+          return new Promise((resolve, reject) => {
+            if (file.size > 15 * 1024 * 1024) {
+              alert(`"${file.name}" 동영상 용량이 큽니다 (15MB 초과). 대용량 파일은 YouTube/웹 동영상 링크 저장을 추천합니다.`);
+              reject(new Error("Video file too large"));
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              resolve(event.target?.result as string);
+            };
+            reader.onerror = (err) => reject(err);
+            reader.readAsDataURL(file);
+          });
+        };
+
+        const newUrls: string[] = [];
+        for (const file of filesArray) {
+          try {
+            const url = await readVideo(file);
+            newUrls.push(url);
+          } catch (err) {
+            console.error("Video file reading error:", err);
+          }
+        }
+        if (newUrls.length > 0) {
+          setVideoUrls((prev) => [...prev, ...newUrls]);
+        }
+      } finally {
+        setIsVideoLoading(false);
+        if (e.target) e.target.value = "";
+      }
+    }
+  };
+
+  // Handle image/video copy & paste inside the content box
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (e.clipboardData) {
       const items = e.clipboardData.items;
-      let hasImage = false;
+      const imageFiles: File[] = [];
+      const videoFiles: File[] = [];
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf("image") !== -1) {
           const file = items[i].getAsFile();
-          if (file) {
-            hasImage = true;
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              if (typeof reader.result === "string") {
-                setImageUrls((prev) => [...prev, reader.result as string]);
-              }
-            };
-            reader.readAsDataURL(file);
-          }
+          if (file) imageFiles.push(file);
+        } else if (items[i].type.indexOf("video") !== -1) {
+          const file = items[i].getAsFile();
+          if (file) videoFiles.push(file);
         }
       }
-      if (hasImage) {
+
+      if (imageFiles.length > 0) {
         e.preventDefault();
+        setIsCompressing(true);
+        try {
+          const compressedUrls = await Promise.all(
+            imageFiles.map((file) => compressImage(file))
+          );
+          setImageUrls((prev) => [...prev, ...compressedUrls]);
+        } catch (err) {
+          console.error("Image paste compression error:", err);
+        } finally {
+          setIsCompressing(false);
+        }
+      }
+
+      if (videoFiles.length > 0) {
+        e.preventDefault();
+        setIsVideoLoading(true);
+        try {
+          for (const file of videoFiles) {
+            if (file.size > 15 * 1024 * 1024) {
+              alert(`"${file.name}" 동영상 용량이 큽니다 (최대 15MB).`);
+              continue;
+            }
+            const url = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = (ev) => resolve(ev.target?.result as string);
+              reader.onerror = (err) => reject(err);
+              reader.readAsDataURL(file);
+            });
+            setVideoUrls((prev) => [...prev, url]);
+          }
+        } catch (err) {
+          console.error("Video paste error:", err);
+        } finally {
+          setIsVideoLoading(false);
+        }
       }
     }
   };
@@ -188,9 +318,24 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
   // Handle final save
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!content.trim() && imageUrls.length === 0) return;
+    if (
+      !content.trim() &&
+      imageUrls.length === 0 &&
+      videoUrls.length === 0 &&
+      linkPreviews.length === 0
+    ) {
+      return;
+    }
 
-    const memoryTitle = title.trim() || (content.trim() ? `${content.substring(0, 15)}...` : "이미지 기록");
+    const memoryTitle =
+      title.trim() ||
+      (content.trim()
+        ? `${content.substring(0, 15)}...`
+        : imageUrls.length > 0
+        ? "사진 기록"
+        : videoUrls.length > 0
+        ? "동영상 기록"
+        : "웹 링크 보관");
 
     const newMemory: Omit<Memory, "id"> = {
       title: memoryTitle,
@@ -329,11 +474,18 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <button
                   type="button"
+                  disabled={isCompressing}
                   onClick={() => fileInputRef.current?.click()}
-                  className="bg-white hover:bg-gray-100/50 border border-dashed border-gray-200 py-3.5 rounded-xl flex flex-col items-center justify-center space-y-1 transition-all"
+                  className="bg-white hover:bg-gray-100/50 border border-dashed border-gray-200 py-3.5 rounded-xl flex flex-col items-center justify-center space-y-1 transition-all disabled:opacity-50"
                 >
-                  <Plus className="w-4 h-4 text-indigo-600" />
-                  <span className="text-[10px] font-medium text-gray-600">내 컴퓨터에서 파일 업로드</span>
+                  {isCompressing ? (
+                    <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
+                  ) : (
+                    <Plus className="w-4 h-4 text-indigo-600" />
+                  )}
+                  <span className="text-[10px] font-medium text-gray-600">
+                    {isCompressing ? "이미지 압축 중..." : "내 컴퓨터에서 파일 업로드"}
+                  </span>
                 </button>
                 <input
                   type="file"
@@ -368,28 +520,56 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
 
           {/* Video Input Drawer */}
           {showVideoInput && (
-            <div className="p-3 bg-gray-50 rounded-xl mt-2 space-y-2 border border-gray-100 animate-fadeIn">
+            <div className="p-3 bg-gray-50 rounded-xl mt-2 space-y-2.5 border border-gray-100 animate-fadeIn">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-gray-500">동영상 주소(YouTube 또는 MP4 링크) 첨부</span>
+                <span className="text-[10px] font-bold text-gray-500">동영상 추가 방법 선택</span>
                 <button type="button" onClick={() => setShowVideoInput(false)} className="text-gray-400 hover:text-gray-600">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <div className="flex space-x-1.5">
-                <input
-                  type="text"
-                  placeholder="예: https://www.youtube.com/watch?v=... 또는 mp4 주소"
-                  value={tempVideoUrl}
-                  onChange={(e) => setTempVideoUrl(e.target.value)}
-                  className="text-[10px] text-gray-700 bg-white rounded-lg p-2 flex-1 border border-gray-100 focus:outline-hidden"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={addVideoUrl}
-                  className="bg-indigo-600 text-white text-[10px] font-bold px-3 rounded-lg hover:bg-indigo-700 whitespace-nowrap"
+                  disabled={isVideoLoading}
+                  onClick={() => videoFileInputRef.current?.click()}
+                  className="bg-white hover:bg-gray-100/50 border border-dashed border-gray-200 py-3.5 rounded-xl flex flex-col items-center justify-center space-y-1 transition-all disabled:opacity-50"
                 >
-                  추가
+                  {isVideoLoading ? (
+                    <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
+                  ) : (
+                    <Plus className="w-4 h-4 text-indigo-600" />
+                  )}
+                  <span className="text-[10px] font-medium text-gray-600">
+                    {isVideoLoading ? "동영상 로딩 중..." : "내 컴퓨터에서 동영상 파일 업로드"}
+                  </span>
                 </button>
+                <input
+                  type="file"
+                  multiple
+                  accept="video/*"
+                  ref={videoFileInputRef}
+                  onChange={handleVideoFileUpload}
+                  className="hidden"
+                />
+                <div className="bg-white border border-gray-100 rounded-xl p-2 flex flex-col justify-between">
+                  <span className="text-[9px] text-gray-400 font-medium mb-1">동영상 주소(YouTube 또는 MP4 링크) 입력</span>
+                  <div className="flex space-x-1">
+                    <input
+                      type="text"
+                      placeholder="예: https://www.youtube.com/watch?v=... 또는 mp4 주소"
+                      value={tempVideoUrl}
+                      onChange={(e) => setTempVideoUrl(e.target.value)}
+                      className="text-[10px] text-gray-700 bg-gray-50 rounded-lg p-1.5 flex-1 border border-gray-100 focus:outline-hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={addVideoUrl}
+                      className="bg-indigo-600 text-white text-[10px] font-bold px-2 rounded-lg hover:bg-indigo-700 whitespace-nowrap"
+                    >
+                      추가
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -425,12 +605,14 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
           )}
 
           {/* Media Attachments Preview List */}
-          {(imageUrls.length > 0 || videoUrls.length > 0 || linkPreviews.length > 0) && (
+          {(imageUrls.length > 0 || isCompressing || videoUrls.length > 0 || isVideoLoading || linkPreviews.length > 0) && (
             <div className="mt-3 bg-gray-50/50 p-3 rounded-xl border border-gray-100 space-y-3.5">
               {/* Image Previews */}
-              {imageUrls.length > 0 && (
+              {(imageUrls.length > 0 || isCompressing) && (
                 <div>
-                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">사진 첨부 목록 ({imageUrls.length})</h4>
+                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    사진 첨부 목록 {imageUrls.length > 0 ? `(${imageUrls.length})` : ""}
+                  </h4>
                   <div className="flex flex-wrap gap-2">
                     {imageUrls.map((img, i) => (
                       <div key={i} className="relative w-14 h-14 rounded-lg overflow-hidden border border-gray-100 group">
@@ -444,26 +626,47 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
                         </button>
                       </div>
                     ))}
+                    {isCompressing && (
+                      <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-gray-200 bg-white flex flex-col items-center justify-center">
+                        <Loader2 className="w-3.5 h-3.5 text-indigo-600 animate-spin" />
+                        <span className="text-[8px] text-gray-400 mt-1 font-medium">압축 중</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
               {/* Video Previews */}
-              {videoUrls.length > 0 && (
+              {(videoUrls.length > 0 || isVideoLoading) && (
                 <div>
-                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">동영상 첨부 목록 ({videoUrls.length})</h4>
+                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    동영상 첨부 목록 {videoUrls.length > 0 ? `(${videoUrls.length})` : ""}
+                  </h4>
                   <div className="space-y-1.5">
                     {videoUrls.map((vid, i) => (
                       <div key={i} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-gray-100 text-[10px] text-gray-600">
-                        <div className="flex items-center space-x-1.5 truncate">
-                          <Film className="w-3 h-3 text-indigo-500 shrink-0" />
-                          <span className="truncate">{vid}</span>
+                        <div className="flex items-center space-x-2 truncate min-w-0 flex-1">
+                          <Film className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          {vid.startsWith("data:video/") || vid.startsWith("blob:") ? (
+                            <div className="flex items-center space-x-2 truncate">
+                              <video src={vid} className="w-8 h-8 object-cover rounded bg-black shrink-0" />
+                              <span className="truncate text-gray-700 font-medium">[업로드된 동영상 파일 #{i + 1}]</span>
+                            </div>
+                          ) : (
+                            <span className="truncate text-gray-700 font-medium">{vid}</span>
+                          )}
                         </div>
-                        <button type="button" onClick={() => removeVideo(i)} className="text-gray-400 hover:text-red-500 ml-2">
+                        <button type="button" onClick={() => removeVideo(i)} className="text-gray-400 hover:text-red-500 ml-2 p-1">
                           <X className="w-3 h-3" />
                         </button>
                       </div>
                     ))}
+                    {isVideoLoading && (
+                      <div className="flex items-center space-x-2 bg-white px-2.5 py-2 rounded-lg border border-gray-200 text-[10px] text-gray-500">
+                        <Loader2 className="w-3.5 h-3.5 text-indigo-600 animate-spin" />
+                        <span>동영상 파일을 로딩하는 중입니다...</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -528,7 +731,14 @@ export default function QuickAddForm({ onSave }: QuickAddFormProps) {
         <div className="pt-4 flex justify-end border-t border-gray-100">
           <button
             type="submit"
-            disabled={!content.trim() && imageUrls.length === 0}
+            disabled={
+              !content.trim() &&
+              imageUrls.length === 0 &&
+              videoUrls.length === 0 &&
+              linkPreviews.length === 0 &&
+              !isCompressing &&
+              !isVideoLoading
+            }
             className="w-full md:w-auto bg-black hover:bg-gray-900 text-white text-xs font-semibold py-2.5 px-8 rounded-xl shadow-sm transition-all disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
           >
             기억 저장하기 🔒
